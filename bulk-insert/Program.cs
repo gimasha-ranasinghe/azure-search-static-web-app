@@ -39,7 +39,9 @@ static async Task BulkInsertAsync(SearchClient client)
     Console.WriteLine("Download data file");
     using HttpClient httpClient = new();
 
-    var csv = await httpClient.GetStringAsync(BOOKS_URL);
+    string csv = await DownloadWithRetryAsync(httpClient, BOOKS_URL);
+
+    // var csv = await httpClient.GetStringAsync(BOOKS_URL);
 
     Console.WriteLine("Reading and parsing raw CSV data");
     var books =
@@ -49,4 +51,35 @@ static async Task BulkInsertAsync(SearchClient client)
     _ = await client.UploadDocumentsAsync(books);
 
     Console.WriteLine("Finished bulk inserting book data");
+}
+
+static async Task<string> DownloadWithRetryAsync(HttpClient httpClient, string url, int maxRetries = 5)
+{
+    int delay = 2000; // Start with 2 seconds
+    for (int attempt = 1; attempt <= maxRetries; attempt++)
+    {
+        try
+        {
+            var response = await httpClient.GetAsync(url);
+
+            if ((int)response.StatusCode == 429)
+            {
+                Console.WriteLine($"Received 429 Too Many Requests. Waiting {delay}ms before retry #{attempt}...");
+                await Task.Delay(delay);
+                delay *= 2; // Exponential backoff
+                continue;
+            }
+
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync();
+        }
+        catch (HttpRequestException ex) when (attempt < maxRetries)
+        {
+            Console.WriteLine($"Request failed: {ex.Message}. Retrying in {delay}ms...");
+            await Task.Delay(delay);
+            delay *= 2;
+        }
+    }
+
+    throw new HttpRequestException("Failed to download file after multiple retries.");
 }
